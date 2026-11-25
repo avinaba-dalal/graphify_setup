@@ -4,7 +4,13 @@ One-shot installer that sets up [graphify](https://pypi.org/project/graphifyy/) 
 
 ## Install
 
-Run from the root of the target codebase (nothing is written to disk; the script is streamed into bash):
+Run from the root of the target codebase (nothing is written to disk; the script is streamed into bash). Requires the [GitHub CLI](https://cli.github.com) (`gh`), logged in:
+
+```sh
+bash -c "$(gh api repos/avinaba-dalal/graphify_setup/contents/install.sh -H 'Accept: application/vnd.github.raw')"
+```
+
+Alternative with `curl` (fails on networks where `raw.githubusercontent.com` is blocked or TLS-intercepted):
 
 ```sh
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/avinaba-dalal/graphify_setup/main/install.sh)"
@@ -33,5 +39,5 @@ The script exits non-zero if verification fails.
 
 - Best run on an up-to-date, clean `main` (`git checkout main && git pull`). The script warns if the git working tree isn't clean, since the first graph would include uncommitted changes.
 
-- Review the script before running: `curl -fsSL https://raw.githubusercontent.com/avinaba-dalal/graphify_setup/main/install.sh | less`
+- Review the script before running: `gh api repos/avinaba-dalal/graphify_setup/contents/install.sh -H 'Accept: application/vnd.github.raw' | less`
 - To undo: `graphify uninstall --purge`, remove `graphify-out/`, and delete the graphify lines from `.git/info/exclude`.
