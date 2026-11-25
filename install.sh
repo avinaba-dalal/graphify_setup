@@ -7,7 +7,7 @@ log()  { printf '==> %s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-PKG="graphifyy"
+PKG="graphifyy[anthropic]"  # anthropic extra: used by graphify for community labeling
 IS_GIT=0
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 && IS_GIT=1
 
@@ -18,19 +18,28 @@ if [ "$IS_GIT" = 1 ]; then
   [ -z "$BASELINE_STATUS" ] || warn "git working tree is not clean; the graph will include uncommitted changes (consider running on an updated, clean main)"
 fi
 
-# Step 1: install graphify if missing (prefers uv, then pipx, then pip --user).
+# Step 1: install graphify (with the anthropic extra) if missing (prefers uv, then pipx, then pip --user).
+# If graphify exists but its environment lacks `anthropic`, adds it. Exits on failure.
 install_graphify() {
-  if command -v graphify >/dev/null 2>&1; then
-    log "graphify already installed ($(command -v graphify))"
+  if ! command -v graphify >/dev/null 2>&1; then
+    log "Installing graphify"
+    if command -v uv >/dev/null 2>&1; then uv tool install "$PKG"
+    elif command -v pipx >/dev/null 2>&1; then pipx install "$PKG"
+    elif command -v pip3 >/dev/null 2>&1; then pip3 install --user "$PKG"
+    else die "need one of uv, pipx or pip3 to install graphify (Python 3.11.5+ required)"; fi
+    export PATH="$HOME/.local/bin:$PATH"
+    command -v graphify >/dev/null 2>&1 || die "graphify installed but not on PATH; add ~/.local/bin to PATH and re-run"
     return
   fi
-  log "Installing graphify"
-  if command -v uv >/dev/null 2>&1; then uv tool install "$PKG"
-  elif command -v pipx >/dev/null 2>&1; then pipx install "$PKG"
-  elif command -v pip3 >/dev/null 2>&1; then pip3 install --user "$PKG"
-  else die "need one of uv, pipx or pip3 to install graphify (Python 3.11.5+ required)"; fi
-  export PATH="$HOME/.local/bin:$PATH"
-  command -v graphify >/dev/null 2>&1 || die "graphify installed but not on PATH; add ~/.local/bin to PATH and re-run"
+  log "graphify already installed ($(command -v graphify))"
+  # Find the interpreter graphify runs on (from its shebang) and check for the anthropic package.
+  local py; py="$(head -n1 "$(command -v graphify)" | sed -n 's/^#![[:space:]]*//p' | cut -d' ' -f1)"
+  if [ -x "$py" ] && ! "$py" -c 'import anthropic' >/dev/null 2>&1; then
+    log "Adding the anthropic package to the existing graphify install"
+    if command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^graphifyy'; then uv tool install "$PKG" --force
+    elif command -v pipx >/dev/null 2>&1 && pipx list --short 2>/dev/null | grep -q '^graphifyy'; then pipx install "$PKG" --force
+    else "$py" -m pip install anthropic; fi
+  fi
 }
 
 # Step 3: adds a pattern to .git/info/exclude (idempotent). Never touches tracked/ignored files.
@@ -61,7 +70,7 @@ ask_platform() {
   local detected ans="" def=1
   detected="$(detect_platform)"
   case "$detected" in android) def=2;; ios) def=3;; esac
-  if [ -r /dev/tty ]; then
+  if (: < /dev/tty) 2>/dev/null; then
     {
       echo "Tailor .graphifyignore to a platform? (detected: $detected)"
       echo "  1) General (no .graphifyignore)"
@@ -114,6 +123,22 @@ IGN
   log "Wrote .graphifyignore for $1 (excluded from git)"
 }
 
+# Moves graphify's merge-driver attribute out of the repo's .gitattributes (which `graphify hook install`
+# creates or modifies, dirtying the tree) into .git/info/attributes. Other .gitattributes content is
+# kept, and a .gitattributes that is already tracked and unmodified is left alone.
+localize_gitattributes() {
+  local line="graphify-out/graph.json merge=graphify" attr tmp tracked=0
+  [ -f .gitattributes ] && grep -qxF "$line" .gitattributes || return 0
+  git ls-files --error-unmatch .gitattributes >/dev/null 2>&1 && tracked=1
+  if [ "$tracked" = 1 ] && git diff --quiet -- .gitattributes; then return 0; fi
+  attr="$(git rev-parse --git-path info/attributes)"
+  mkdir -p "$(dirname "$attr")"; touch "$attr"
+  grep -qxF "$line" "$attr" || echo "$line" >> "$attr"
+  tmp="$(mktemp)"; grep -vxF "$line" .gitattributes > "$tmp" || true
+  if [ -s "$tmp" ] || [ "$tracked" = 1 ]; then cat "$tmp" > .gitattributes; else rm -f .gitattributes; fi
+  rm -f "$tmp"
+}
+
 # Step 7: checks git cleanliness, hooks and generated files. Returns non-zero on any failure.
 verify() {
   local ok=0
@@ -152,20 +177,23 @@ fi
 PLATFORM="$(ask_platform)"
 [ "$PLATFORM" = general ] || write_graphifyignore "$PLATFORM"
 
-# Runs graphify with LLM API keys removed so it never auto-selects a hosted backend.
-graphify_offline() {
-  env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u GEMINI_API_KEY -u GOOGLE_API_KEY \
-      -u MOONSHOT_API_KEY -u KIMI_API_KEY -u DEEPSEEK_API_KEY graphify "$@"
-}
+log "Extracting graph (code only)"
+graphify extract . --code-only
 
-log "Extracting graph (code only, offline)"
-graphify_offline extract . --code-only
+# Community labeling uses Claude when ANTHROPIC_API_KEY is set; otherwise it is disabled so graphify
+# doesn't fall back to the `claude` CLI (which fails when not logged in). Environment is left untouched.
 log "Clustering"
-graphify_offline cluster-only .
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+  GRAPHIFY_BACKEND=claude graphify cluster-only .
+else
+  warn "ANTHROPIC_API_KEY not set; skipping LLM community labeling"
+  GRAPHIFY_BACKEND=none graphify cluster-only .
+fi
 
 if [ "$IS_GIT" = 1 ]; then
   log "Installing git hooks"
   graphify hook install
+  localize_gitattributes
 fi
 
 log "Verifying"
