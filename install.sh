@@ -152,10 +152,16 @@ fi
 PLATFORM="$(ask_platform)"
 [ "$PLATFORM" = general ] || write_graphifyignore "$PLATFORM"
 
-log "Extracting graph"
-graphify extract .
+# Runs graphify with LLM API keys removed so it never auto-selects a hosted backend.
+graphify_offline() {
+  env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u GEMINI_API_KEY -u GOOGLE_API_KEY \
+      -u MOONSHOT_API_KEY -u KIMI_API_KEY -u DEEPSEEK_API_KEY graphify "$@"
+}
+
+log "Extracting graph (code only, offline)"
+graphify_offline extract . --code-only
 log "Clustering"
-graphify cluster-only .
+graphify_offline cluster-only .
 
 if [ "$IS_GIT" = 1 ]; then
   log "Installing git hooks"
