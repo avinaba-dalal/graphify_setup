@@ -24,7 +24,7 @@ The `bash -c "$(...)"` form keeps stdin attached to your terminal so the interac
 2. Registers graphify for Claude via `graphify install`. This is user-level only: it adds the skill and a graphify section to `~/.claude/CLAUDE.md` (telling Claude to query the graph first in any repo with a `graphify-out/`), and does **not** write `CLAUDE.md` or `.claude/` into the repo.
 3. If the codebase is a git repo, adds `graphify-out/` to `.git/info/exclude` (local only; `.gitignore` is never modified). Skipped for non-git directories, as are the hook and git checks.
 4. Detects the platform from the codebase (Android: `build.gradle*`, `AndroidManifest.xml`; iOS: `*.xcodeproj`, `Podfile`, `Package.swift`) and asks whether to tailor `.graphifyignore` for **Android** or **iOS**, defaulting to the detected platform (*general*, i.e. no `.graphifyignore`, if unknown or ambiguous). An existing `.graphifyignore` is never overwritten; a generated one is also added to `.git/info/exclude`.
-5. Runs `graphify extract .` and `graphify cluster-only .`.
+5. Runs `graphify extract . --code-only` and `graphify cluster-only .` fully offline: LLM API keys (e.g. `ANTHROPIC_API_KEY`) are removed from graphify's environment, so no file contents are sent to any API and no extra Python packages are needed. Docs, PDFs and images are not part of the graph.
 6. Installs the git hooks (`graphify hook install`) so the graph rebuilds on commit/checkout.
 7. Verifies:
    - `graphify-out/graph.json` exists
@@ -36,6 +36,8 @@ The `bash -c "$(...)"` form keeps stdin attached to your terminal so the interac
 The script exits non-zero if verification fails.
 
 ## Notes
+
+- No LLM is used: graphify runs offline in code-only mode and the `anthropic` package is neither required nor installed. Any `ANTHROPIC_API_KEY` in your environment is ignored by the script's graphify calls.
 
 - Best run on an up-to-date, clean `main` (`git checkout main && git pull`). The script warns if the git working tree isn't clean, since the first graph would include uncommitted changes.
 
